@@ -1,0 +1,10 @@
+Coco/R is a compiler generator developed by Hanspeter Moessenboeck.
+See http://ssw.jku.at/Coco/ for the project home.
+
+The Ada version (i.e. a version that is written in Ada and that generates
+Ada code) has been created by Oleksandr Havva. The link given in the
+documentation, http://cs.ru.ac.za/homes/cspt/cocor.htm, seems to be
+dead by now.
+
+Import into Github (and the addition of a GPS project file) by
+Ansgar Esztermann <aeszter@mpibpc.mpg.de>.
