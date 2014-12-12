@@ -1,0 +1,10 @@
+These are the frame files for the version of Coco/R
+that produces Ada code assuming that the FileIO
+I/O library will be available.
+
+
+These frame files can act as the basis for special
+purpose frame files. However, the overall structure
+and especially the sections marked --> must be
+preserved, unless Coco/R is itself modified.
+

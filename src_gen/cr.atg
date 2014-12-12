@@ -1,0 +1,640 @@
+$LSC (*N  $ACFGILMOSXN *)
+(*    COCO/R for MS-DOS grammar used to generate COCO/R itself  *)
+(*    as adapted by P.D. Terry, January 1992                    *)
+(*    version 1.50 last modified Sat  11-13-99                  *)
+
+--  Ada like comments also allowed
+
+COMPILER CR
+
+(* ------------------------ semantic declarations ------------------------- *)
+
+
+   identifier  : constant := 0;
+   str_const   : constant := 1;
+
+
+   function CHR (Item: Integer) return Character
+   is
+   begin
+      return Character'Val (Item);
+   end CHR;
+   pragma Inline (CHR);
+   
+   function ORD (Item: Character) return Integer
+   is
+   begin
+      return Character'Pos (Item);
+   end ORD;
+   pragma Inline (ORD);
+   
+   function Allocate_String (S : String) return FileIO.String_Ptr
+   is
+      P : FileIO.String_Ptr;
+   begin
+      P := new String'(S);
+      return P;
+   end Allocate_String;
+   pragma Inline (Allocate_String);
+
+
+   procedure Fix_String
+     (name  : in out String;
+      len   : in     CARDINAL)
+   is
+      Has_Double  : Boolean;
+      Has_Spaces  : Boolean;
+   begin
+      if  len = 2  then
+         Semantic_Error (129);
+         return;
+      end if;
+      if  CRT.ignoreCase  then
+         for  I  in 2..(len - 1)  loop
+            name (I) := FileIO.Up_Case (name (I));
+         end loop;
+      end if;
+
+      Has_Double := FALSE;
+      Has_Spaces := FALSE;
+
+      for  I  in 2..(len - 1)  loop
+         if  name (I) = '"'  then
+            Has_Double := TRUE;
+         end if;
+         if  name (I) <= ' '  then
+            Has_Spaces := TRUE;
+         end if;
+      end loop;
+      if  not Has_Double  then
+         name (1)   := '"';
+         name (len) := '"';
+      end if;
+      if  Has_Spaces  then
+         Semantic_Error (124);
+      end if;
+   end Fix_String;
+
+   procedure Match_Literal (sp: in     Integer)
+   is
+      sn       :  CRT.Symbol_Node;
+      sn1      :  CRT.Symbol_Node;
+      matchedSp: Integer;
+   begin
+      CRT.Get_Symbol_Node (sp, sn);
+      CRA.Match_DFA (sn.Symbol_Name.all, sp, matchedSp);
+      if  matchedSp /= CRT.No_Symbol  then
+         CRT.Get_Symbol_Node (matchedSp, sn1);
+         sn1.struct := CRT.TK_Class_Literal_Token;
+         CRT.Put_Symbol_Node (matchedSp, sn1);
+         sn.struct := CRT.TK_Literal_Token;
+      else
+         sn.struct := CRT.TK_Class_Token;
+      end if;
+      CRT.Put_Symbol_Node (sp, sn);
+   end Match_Literal;
+
+   procedure Set_Context (gp: in     Integer)
+   is
+      The_Graph_Index: Integer         := gp;
+      The_Graph_Node : CRT.Graph_Node;
+   begin
+      while  The_Graph_Index > 0  loop
+         CRT.Get_Graph_Node (The_Graph_Index, The_Graph_Node);
+         if  (The_Graph_Node.Node_Type = CRT.NT_Single_Character) or else
+             (The_Graph_Node.Node_Type = CRT.NT_Character_Class)  then
+            The_Graph_Node.Index_2 := CRT.contextTrans;
+            CRT.Put_Graph_Node (The_Graph_Index, The_Graph_Node);
+         elsif  (The_Graph_Node.Node_Type = CRT.NT_Optional) or else
+                (The_Graph_Node.Node_Type = CRT.NT_Iteration)  then
+            Set_Context (The_Graph_Node.Index_1);
+         elsif  The_Graph_Node.Node_Type = CRT.NT_Alternative  then
+            Set_Context (The_Graph_Node.Index_1);
+            Set_Context (The_Graph_Node.Index_2);
+         end if;
+         The_Graph_Index := The_Graph_Node.next;
+      end loop;
+   end Set_Context;
+
+   procedure Set_Option (S: in out FileIO.String_Ptr)
+   is
+   begin
+      for  I in S.all'Range  loop
+         S (I) := FileIO.Up_Case (S (I));
+         if  (S (I) >= 'A') and then
+             (S (I) <= 'Z')  then
+            CRT.ddt (S (I)) := TRUE;
+         end if;
+      end loop;
+      FileIO.Free_String (S);
+      S := null;
+   end Set_Option;
+
+
+
+
+CHARACTERS
+
+  letter   = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_".
+  digit    = "0123456789".
+  ctrl     = CHR(1) .. CHR(31).
+  tab      = CHR(9).
+  eol      = CHR(13).
+  lf       = CHR(10).
+  noQuote1 = ANY - '"' - ctrl.
+  noQuote2 = ANY - "'" - ctrl.
+
+IGNORE tab + eol + lf
+
+TOKENS
+
+  identifier = letter {letter | digit}.
+  string     = '"' {noQuote1} '"' | "'" {noQuote2} "'".
+  badstring  = '"' {noQuote1} (eol | lf) | "'" {noQuote2} (eol | lf).
+  number     = digit {digit}.
+
+PRAGMAS
+
+  Options = "$" {letter | digit} .
+                (. CRS.Get_Name (CRS.nextPos, CRS.nextLen, S);
+                   Set_Option (S);  .)
+
+COMMENTS FROM "(*" TO "*)" NESTED
+COMMENTS FROM "--" TO lf
+
+PRODUCTIONS
+
+CR                            (. startedDFA  : Boolean;
+                                 Ok          : Boolean;
+                                 undef       : Boolean;
+                                 hasAttrs    : Boolean;
+                                 unknownSy   : Integer;
+                                 eofSy       : Integer;
+                                 gR          : Integer;
+                                 gramLine    : Integer;
+                                 sp          : Integer;
+                                 name        : CRT.Name_Ptr;
+                                 gramName    : CRT.Name_Ptr;
+                                 sn          : CRT.Symbol_Node; .)
+=
+"COMPILER"
+                              (. gramLine       := CRS.line;
+                                 eofSy          := CRT.New_Sym (CRT.NT_Terminal_Symbol, Allocate_String ("EOF"), 0);
+                                 CRT.genScanner := TRUE;
+                                 CRT.ignoreCase := FALSE;
+                                 Sets.Clear (CRT.ignored);
+                                 startedDFA     := FALSE; .)
+
+Ident <gramName>              (. CRT.semDeclPos.Start  := CRS.nextPos; .)
+{ ANY }                       (. CRT.semDeclPos.Length := FileIO.INTL (CRS.nextPos - CRT.semDeclPos.Start);
+                                 CRT.semDeclPos.Column := 0; .)
+{ Declaration <startedDFA> }
+SYNC
+"PRODUCTIONS"                 (. Ok := Successful;
+                                 if  Ok and then CRT.genScanner  then
+                                    CRA.Convert_NDFA_into_DFA (Ok);
+                                 end if;
+                                 if  not Ok  then
+                                    Semantic_Error (127);
+                                 end if;
+                                 CRT.nNodes := 0; .)
+{ Ident <name>                (. sp := CRT.Find_Symbol (name.all);
+                                 undef := sp = CRT.No_Symbol;
+                                 if  undef  then
+                                    sp := CRT.New_Sym (CRT.NT_Nonterminal_Symbol, name, CRS.line);
+                                    CRT.Get_Symbol_Node (sp, sn);
+                                 else
+                                    CRT.Get_Symbol_Node (sp, sn);
+                                    if  sn.Node_Type = CRT.NT_Nonterminal_Symbol  then
+                                       if  sn.struct > 0  then
+                                          Semantic_Error (107);
+                                       end if;
+                                    else
+                                       Semantic_Error (108);
+                                    end if;
+                                    sn.Source_Line := CRS.line;
+                                 end if;
+                                 hasAttrs := sn.Attr_Pos.Start >= 0; .)
+  ( Attributes <sn.Attr_Pos>  (. if  not undef and then not hasAttrs  then
+                                    Semantic_Error (105);
+                                 end if;
+                                 CRT.Put_Symbol_Node (sp, sn); .)
+  |                           (. if  not undef and then hasAttrs  then
+                                    Semantic_Error (105);
+                                 end if; .)
+  )
+  [ Semantic_Text <sn.Sem_Action_Pos> ]
+  WEAK "="
+  Expression <sn.struct, gR>  (. CRT.Complete_Graph  (gR);
+                                 CRT.Put_Symbol_Node (sp, sn); .)
+  WEAK "."
+  }
+"END" Ident <name>            (. sp := CRT.Find_Symbol (gramName.all);
+                                 if  sp = CRT.No_Symbol  then
+                                    Semantic_Error (111);
+                                 else
+                                    CRT.Get_Symbol_Node (sp, sn);
+                                    if  sn.Attr_Pos.Start >= 0  then
+                                       Semantic_Error (112);
+                                    end if;
+                                    CRT.root := CRT.New_Graph_Node (CRT.NT_Nonterminal_Symbol, sp, gramLine);
+                                 end if;
+                                 if  name.all /= gramName.all  then
+                                    Semantic_Error (117);
+                                 end if; .)
+"."                           (. unknownSy := CRT.New_Sym (CRT.NT_Terminal_Symbol, Allocate_String ("not"), 0);  .)
+
+
+.
+
+(* ---------------------------------------------------------------------------- *)
+
+Declaration <startedDFA: in out Boolean>
+                              (.    gL1            : Integer;
+                                    gR1            : Integer;
+                                    gL2            : Integer;
+                                    gR2            : Integer;
+                                    nested         : Boolean; .)
+= (
+      "CHARACTERS" { Set_Declaration }
+    | "TOKENS"  { Token_Declaration <CRT.NT_Terminal_Symbol> }
+    | "NAMES"   { Name_Declaration }
+    | "PRAGMAS" { Token_Declaration <CRT.NT_Pragma_Symbol> }
+    | "COMMENTS"
+      "FROM" Token_Expression <gL1, gR1>
+      "TO" Token_Expression <gL2, gR2>
+      ( "NESTED"              (. nested := TRUE; .)
+        |                     (. nested := FALSE; .)
+      )
+                              (. CRA.Define_New_Comment (gL1, gL2, nested); .)
+    | "IGNORE"
+      ( "CASE"                (. if  startedDFA  then
+                                    Semantic_Error (130);
+                                 end if;
+                                 CRT.ignoreCase := TRUE; .)
+      | Set <CRT.ignored>     (. if  Sets.Is_In (CRT.ignored, 0)  then
+                                    Semantic_Error (119);
+                                 end if; .)
+      )
+  )                           (. startedDFA := TRUE; .)
+.
+
+
+(* ---------------------------------------------------------------------------- *)
+
+Set_Declaration               (.    c     : Integer;
+                                    oneSet: CRT.CRT_Set;
+                                    name  : CRT.Name_Ptr; .)
+= Ident <name>                (. c := CRT.Get_Class_By_Name (name.all);
+                                 if  c >= 0  then
+                                    Semantic_Error (107);
+                                 end if; .)
+  "=" Set <oneSet>            (. if  Sets.Empty (oneSet)  then
+                                    Semantic_Error (101);
+                                 end if;
+                                 c := CRT.New_Character_Class (name, oneSet); .)
+  ".".
+
+(* ---------------------------------------------------------------------------- *)
+
+Set <the_set: in out CRT.CRT_Set> (.    set2: CRT.CRT_Set; .)
+= Symbol_Set <the_set>
+  { "+" Symbol_Set <set2>         (. Sets.Unite (the_set, set2); .)
+  | "-" Symbol_Set <set2>         (. Sets.Differ (the_set, set2); .)
+  }.
+
+(* ---------------------------------------------------------------------------- *)
+
+Symbol_Set <the_set: in out CRT.CRT_Set>
+                              (.    I     : CARDINAL;
+                                    n1    : CARDINAL;
+                                    n2    : CARDINAL;
+                                    c     : Integer;
+                                    name  : CRT.Name_Ptr;
+                                    S     : FileIO.String_Ptr; .)
+=                             (. Sets.Clear (the_set); .)
+  (   Ident <name>            (. c := CRT.Get_Class_By_Name (name.all);
+                                 if  c < 0  then
+                                    Semantic_Error (115);
+                                 else
+                                    CRT.Get_Character_Class (c, the_set);
+                                 end if; .)
+    | string                  (. CRS.Get_Name (CRS.pos, CRS.len, S);
+                                 I := 2;
+                                 while  S (I) /= S (1)  loop
+                                    if  CRT.ignoreCase  then
+                                       S (I) := FileIO.Up_Case (S (I));
+                                    end if;
+                                    Sets.Incl (the_set, ORD (S (I)));
+                                    I := I + 1;
+                                 end loop; .)
+    | Single_Character <n1>
+                              (. Sets.Incl (the_set, n1); .)
+      [ ".." Single_Character <n2>
+                              (. for  I in n1 .. n2  loop
+                                    Sets.Incl (the_set, I);
+                                 end loop; .)
+      ]
+    | "ANY"                   (. for  I in 0 .. 255  loop
+                                    Sets.Incl (the_set, I);
+                                 end loop; .)
+  ) .
+
+(* ---------------------------------------------------------------------------- *)
+
+Single_Character <n: in out CARDINAL>
+                              (.    S: FileIO.String_Ptr; .)
+  =
+    "CHR" "("
+    (   number                (. CRS.Get_Name (CRS.pos, CRS.len, S);
+                                 n := 0;
+                                 for  I in 1..CRS.len  loop
+                                    n := 10 * n + ORD (S (I)) - ORD ('0');
+                                 end loop;
+                                 if  n > 255  then
+                                    Semantic_Error (118);
+                                    n := n MOD 256;
+                                 end if;
+                                 if  CRT.ignoreCase  then
+                                    n := ORD (FileIO.Up_Case (CHR (n)));
+                                 end if; .)
+      | string                (. CRS.Get_Name (CRS.pos, CRS.len, S);
+                                 if  CRS.len /= 3  then
+                                    Semantic_Error (118);
+                                 end if;
+                                 if  CRT.ignoreCase  then
+                                    S (2) := FileIO.Up_Case (S (2));
+                                 end if;
+                                 n := ORD (S (2)); .)
+     )
+     ")" .
+
+(* ---------------------------------------------------------------------------- *)
+
+Token_Declaration <typ: Integer>
+                              (.    kind  : Integer;
+                                    name  : CRT.Name_Ptr;
+                                    pos   : CRT.Position;
+                                    sp    : Integer;
+                                    gL    : Integer;
+                                    gR    : Integer;
+                                    sn    : CRT.Symbol_Node; .)
+= Symbol <name, kind>         (. if  CRT.Find_Symbol (name.all) /= CRT.No_Symbol  then
+                                    Semantic_Error (107);
+                                 else
+                                    sp := CRT.New_Sym (typ, name, CRS.line);
+                                    CRT.Get_Symbol_Node (sp, sn);
+                                    sn.struct := CRT.TK_Class_Token;
+                                    CRT.Put_Symbol_Node (sp, sn);
+                                 end if; .)
+  SYNC
+  ( "="
+    Token_Expression <gL, gR>
+                              (. if  kind /= identifier  then
+                                    Semantic_Error (113);
+                                 end if;
+                                 CRT.Complete_Graph (gR);
+                                 CRA.Convert_To_States (gL, sp); .)
+    "."
+  |                           (. if  kind = identifier  then
+                                    CRT.genScanner := FALSE;
+                                 else
+                                    Match_Literal (sp);
+                                 end if; .)
+  )
+  [ Semantic_Text <pos>       (. if  typ = CRT.NT_Terminal_Symbol  then
+                                    Semantic_Error (114);
+                                 end if;
+                                 CRT.Get_Symbol_Node (sp, sn);
+                                 sn.Sem_Action_Pos := pos;
+                                 CRT.Put_Symbol_Node (sp, sn); .)
+  ].
+
+(* ---------------------------------------------------------------------------- *)
+
+Expression <gL: in out Integer; gR: in out Integer>
+                              (.    gL2   : Integer;
+                                    gR2   : Integer;
+                                    first : Boolean; .)
+= Term <gL, gR>               (. first := TRUE; .)
+  { WEAK "|"
+    Term <gL2, gR2>           (. if  first  then
+                                   CRT.Make_First_Alternative (gL, gR);
+                                   first := FALSE;
+                                 end if;
+                                 CRT.Concatenate_Alternative (gL, gR, gL2, gR2); .)
+  }
+.
+
+(* ---------------------------------------------------------------------------- *)
+
+Term <gL: in out Integer; gR: in out Integer>
+                              (.    gL2         : Integer;
+                                    gR2         : Integer; .)
+=                             (. gL := 0;
+                                 gR := 0;
+                                  .)
+( Factor <gL, gR>
+    { Factor <gL2, gR2>       (. CRT.Concatenate_Sequential (gL, gR, gL2, gR2); .)
+    }
+  |                           (. gL := CRT.New_Graph_Node (CRT.NT_Empty_Alternative, 0, 0);
+                                 gR := gL; .)
+  ).
+
+(* ---------------------------------------------------------------------------- *)
+
+Factor <gL: in out Integer; gR: in out Integer>
+                              (.    sp      : Integer;
+                                    kind    : Integer;
+                                    name    : CRT.Name_Ptr;
+                                    gn      : CRT.Graph_Node;
+                                    sn      : CRT.Symbol_Node;
+                                    the_set : CRT.CRT_Set;
+                                    undef   : Boolean;
+                                    weak    : Boolean;
+                                    pos     : CRT.Position; .)
+=                             (. gL := 0;
+                                 gR := 0;
+                                 weak := FALSE; .)
+( [ "WEAK"                    (. weak := TRUE; .)
+  ]
+  Symbol <name, kind>         (. sp    := CRT.Find_Symbol (name.all);
+                                 undef := sp = CRT.No_Symbol;
+                                 if  undef  then
+                                    if  kind = identifier  then
+                                       sp := CRT.New_Sym (CRT.NT_Nonterminal_Symbol, name, 0);
+                                    elsif  CRT.genScanner  then
+                                       sp := CRT.New_Sym (CRT.NT_Terminal_Symbol, name, CRS.line);
+                                       Match_Literal (sp);
+                                    else
+                                       Semantic_Error (106);
+                                       sp := 0;
+                                    end if;
+                                 end if;
+                                 CRT.Get_Symbol_Node (sp, sn);
+                                 if  (sn.Node_Type /= CRT.NT_Terminal_Symbol) and then
+                                     (sn.Node_Type /= CRT.NT_Nonterminal_Symbol)  then
+                                    Semantic_Error (104);
+                                 end if;
+                                 if  weak  then
+                                    if  sn.Node_Type = CRT.NT_Terminal_Symbol  then
+                                       sn.Node_Type := CRT.NT_Weak_Terminal_Symbol;
+                                    else
+                                       Semantic_Error (123);
+                                    end if;
+                                 end if;
+                                 gL := CRT.New_Graph_Node (sn.Node_Type, sp, CRS.line); 
+                                 gR := gL; .)
+  ( Attributes <pos>          (. CRT.Get_Graph_Node (gL, gn); 
+                                 gn.Source_Pos := pos;
+                                 CRT.Put_Graph_Node (gL, gn);
+                                 CRT.Get_Symbol_Node (sp, sn);
+                                 if  sn.Node_Type /= CRT.NT_Nonterminal_Symbol  then 
+                                    Semantic_Error (103);
+                                 end if;
+                                 if  undef  then
+                                   sn.Attr_Pos := pos; 
+                                   CRT.Put_Symbol_Node (sp, sn);
+                                 elsif  sn.Attr_Pos.Start < 0  then 
+                                    Semantic_Error (105);
+                                 end if; .)
+  |                           (. CRT.Get_Symbol_Node (sp, sn);
+                                 if  sn.Attr_Pos.Start >= 0  then 
+                                    Semantic_Error (105);
+                                 end if; .)
+  )
+| "(" Expression <gL, gR> ")"
+| "[" Expression <gL, gR> "]" (. CRT.Make_Option (gL, gR); .)
+| "{" Expression <gL, gR> "}" (. CRT.Make_Iteration (gL, gR); .)
+
+| Semantic_Text <pos>         (. gL := CRT.New_Graph_Node (CRT.NT_Semantic_Action, 0, 0); 
+                                 gR := gL;
+                                 CRT.Get_Graph_Node (gL, gn);
+                                 gn.Source_Pos := pos;
+                                 CRT.Put_Graph_Node (gL, gn); .)
+| "ANY"                       (. Sets.Fill (the_set); 
+                                 Sets.Excl (the_set, CRT.EOF_Symbol);
+                                 gL := CRT.New_Graph_Node (CRT.NT_ANY_Symbol, CRT.New_Set (the_set), 0); 
+                                 gR := gL; .)
+| "SYNC"                      (. gL := CRT.New_Graph_Node (CRT.NT_SYNC_Symbol, 0, 0); 
+                                 gR := gL; .)
+).
+
+(* ---------------------------------------------------------------------------- *)
+
+Token_Expression <gL: in out Integer; gR: in out Integer>
+                              (.    gL2   : Integer;
+                                    gR2   : Integer;
+                                    first : Boolean; .)
+= Token_Term <gL, gR>         (. first := TRUE; .)
+  { WEAK "|"
+    Token_Term <gL2, gR2>     (. if  first  then
+                                    CRT.Make_First_Alternative (gL, gR); 
+                                    first := FALSE;
+                                 end if;
+                                 CRT.Concatenate_Alternative (gL, gR, gL2, gR2); .)
+  }.
+
+(* ---------------------------------------------------------------------------- *)
+
+Token_Term <gL: in out Integer; gR: in out Integer>
+                              (.    gL2: Integer;
+                                    gR2: Integer; .)
+= Token_Factor <gL, gR>
+  { Token_Factor <gL2, gR2>   (. CRT.Concatenate_Sequential (gL, gR, gL2, gR2); .)
+  }
+  [ "CONTEXT"
+    "(" Token_Expression <gL2, gR2>
+                              (. Set_Context (gL2); 
+                                 CRT.Concatenate_Sequential (gL, gR, gL2, gR2); .)
+    ")"
+  ].
+
+(* ---------------------------------------------------------------------------- *)
+
+Token_Factor <gL: in out Integer; gR: in out Integer>
+                              (.    kind  : Integer;
+                                    c     : Integer;
+                                    the_set   : CRT.CRT_Set;
+                                    name  : CRT.Name_Ptr; .)
+=                             (. gL := 0; 
+                                 gR := 0; .)
+( Symbol <name, kind>         (. if  kind = identifier  then
+                                    c := CRT.Get_Class_By_Name (name.all);
+                                    if  c < 0  then
+                                       Semantic_Error (115);
+                                       Sets.Clear (the_set); 
+                                       c := CRT.New_Character_Class (name, the_set);
+                                    end if;
+                                    gL := CRT.New_Graph_Node (CRT.NT_Character_Class, c, 0);
+                                    gR := gL;
+                                 else
+                                    CRT.String_To_Graph (name.all, gL, gR);
+                                 end if; .)
+| "(" Token_Expression <gL, gR> ")"
+| "[" Token_Expression <gL, gR> "]"
+                              (. CRT.Make_Option (gL, gR); .)
+| "{" Token_Expression <gL, gR> "}"
+                              (. CRT.Make_Iteration (gL, gR); .)
+).
+
+(* ---------------------------------------------------------------------------- *)
+
+Ident <name: in out CRT.Name_Ptr> =
+  identifier                  (. CRS.Get_Name (CRS.pos, CRS.len, name); .).
+
+(* ---------------------------------------------------------------------------- *)
+
+Symbol <name: in out CRT.Name_Ptr; kind: in out Integer>
+  =
+  ( Ident <name>              (. kind := identifier; .)
+  | string                    (. CRS.Get_Name (CRS.pos, CRS.len, name); 
+                                 kind := str_const;
+                                 Fix_String (name.all, CRS.len); .)
+  ).
+
+(* ---------------------------------------------------------------------------- *)
+
+Attributes <Attr_Pos: in out CRT.Position> =
+    "<"                       (. Attr_Pos.Start  := CRS.pos + 1; 
+                                 Attr_Pos.Column := CRS.col + 1; .)
+    { ANY | badstring         (. Semantic_Error (102); .)
+    }
+    ">"                       (. Attr_Pos.Length := FileIO.INTL (CRS.pos - Attr_Pos.Start); .)
+  |
+    "<."                      (. Attr_Pos.Start  := CRS.pos + 2; 
+                                 Attr_Pos.Column := CRS.col + 2; .)
+    { ANY | badstring         (. Semantic_Error (102); .)
+    }
+    ".>"                      (. Attr_Pos.Length := FileIO.INTL (CRS.pos - Attr_Pos.Start); .).
+
+(* ---------------------------------------------------------------------------- *)
+
+Semantic_Text <The_Sem_Action_Pos: in out CRT.Position> =
+  "(."                        (. The_Sem_Action_Pos.Start  := CRS.pos + 2; 
+                                 The_Sem_Action_Pos.Column := CRS.col + 2; .)
+  {   ANY
+    | badstring               (. Semantic_Error (102); .)
+    | "(."                    (. Semantic_Error (109); .)
+  }
+  ".)"                        (. if  (CRS.pos - The_Sem_Action_Pos.Start) > FileIO.INT (CRT.maxSemLen)  then 
+                                    Semantic_Error (128);
+                                 end if;
+                                 The_Sem_Action_Pos.Length := FileIO.ORDL (CRS.pos - The_Sem_Action_Pos.Start); .).
+
+(* ---------------------------------------------------------------------------- *)
+
+Name_Declaration              (.    name  : CRT.Name_Ptr;
+                                    str   : CRT.Name_Ptr; .)
+  = Ident <name> "="
+    ( identifier              (. CRS.Get_Name (CRS.pos, CRS.len, str); .)
+      | string                (. CRS.Get_Name (CRS.pos, CRS.len, str);
+                                 Fix_String   (str.all, CRS.len); .)
+       )                      (. CRT.New_Name (name, str); .)
+  ".".
+
+(* ---------------------------------------------------------------------------- *)
+
+END CR.
+
+
